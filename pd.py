@@ -53,19 +53,23 @@ class Decoder(srd.Decoder):
         self.type=0
         self.lastss=0
         self.payload=[]
-        self.channelss=0
+        self.datass=0
         self.nbit=0
         self.chanvalue=0
         self.appid=0
         self.data=0
+        self.lastframees=0
+        self.uplink=False
+        self.prim=0
 
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
-            if value!=115200:
-                print("warning! wrong baudrate: "+str(value),flush=True)
+            pass
+            #~ if value!=115200:
+                #~ print("warning! wrong baudrate: "+str(value),flush=True)
         
     def decode(self, ss, es, data):
         if data[0] == 'FRAME':
@@ -76,14 +80,58 @@ class Decoder(srd.Decoder):
                 else:
                     return
             if self.stuffing:
+                self.lastss=ss
                 if byte==0x5D:
                     byte=0x7D
                 elif byte==0x5E:
                     byte=0x7E
             else:
                 self.lastss=ss
+                
+            if not self.uplink and not self.inframe and self.type==1:       #we might receive an uplink frame, no 0x7E start byte
+                if self.type==1 and ss<self.lastframees+3000:                   #uplink must be within 3ms
+                    self.uplink=True
+                    self.length=byte    # should be 8
+                    self.sum=byte
+                    self.nbyte=0
+                    self.appid=0
+                    self.data=0
+                    self.put(ss, es, self.out_ann, [1, ['LENGTH','L']])
+                    return
 
-            if (not self.stuffing) and byte==0x7D:
+            if self.uplink:
+                self.sum=self.sum+byte
+                if self.nbyte==0:       #type
+                    self.type=byte
+                    self.put(ss, es, self.out_ann, [3, ['TYPE','T']])
+                elif self.nbyte==1:     #prim
+                    self.prim=byte
+                    self.put(ss, es, self.out_ann, [9, ['PRIM','P']])
+                    self.ss=ss
+                elif self.nbyte>=2 and self.nbyte<4:    #appid
+                    self.appid=self.appid+byte*256**(self.nbyte-2)
+                    if  self.nbyte==2:
+                        self.datass=ss
+                    if self.nbyte==3:
+                        self.put(self.datass, es, self.out_ann, [10, ['APPID: '+hex(self.appid),'APPID','A']])
+                elif self.nbyte>=4 and self.nbyte<8:    #data
+                    self.data=self.data+byte*256**(self.nbyte-4)
+                    if  self.nbyte==4:
+                        self.datass=ss
+                    if self.nbyte==7:
+                        self.put(self.datass, es, self.out_ann, [11, ['DATA: '+str(self.data),'DATA','D']])
+                        self.put(self.ss, es, self.out_ann, [0, ['UPLINK','U']])
+                elif self.nbyte==8:     #checksum
+                    while self.sum>0xFF:
+                        self.sum=(self.sum>>8)+(self.sum&0xFF)
+                    if self.sum==0xFF:
+                        self.put(self.lastss, es, self.out_ann, [4, ['CHECKSUM','K']])
+                    else:
+                        self.put(self.lastss, es, self.out_ann, [4, ['BAD CHECKSUM','BK']])
+                    self.uplink=False
+                    self.type=0
+                self.nbyte=self.nbyte+1
+            elif (not self.stuffing) and byte==0x7D:
                 self.stuffing=True
             else:
                 self.sum=self.sum+byte
@@ -97,6 +145,7 @@ class Decoder(srd.Decoder):
                             return
                         self.inframe=False
                         self.payload=[]
+                        self.lastframees=es
                         if self.nbyte!=self.length+2:
                             ##CHECK
                             self.put(self.lastss, es, self.out_ann, [0, ['BAD FRAME '+str(self.nbyte)+'+'+str(self.length),'BF']])
@@ -129,7 +178,6 @@ class Decoder(srd.Decoder):
                                 self.put(self.lastss, es, self.out_ann, [4, ['CHECKSUM','K']])
                             else:
                                 self.put(self.lastss, es, self.out_ann, [4, ['BAD CHECKSUM','BK']])
-                                print(hex(self.sum),flush=True);
                 else:
                     if (not self.stuffing) and byte==0x7E:
                         self.put(self.lastss, es, self.out_ann, [0, ['HEAD','H']])
@@ -139,7 +187,6 @@ class Decoder(srd.Decoder):
                 self.stuffing=False
         elif data[0]=='DATA':
             if self.type==0:
-                #print(data[2],flush=True)
                 bits=data[2][1]
                 if self.nbyte==24:
                     ch17=bits[0][0]
@@ -158,26 +205,26 @@ class Decoder(srd.Decoder):
                     for i in range(8):
                         if math.floor(self.nbit/11)<16:
                             if self.nbit%11==0:
-                                self.channelss=bits[i][1]
+                                self.datass=bits[i][1]
                                 self.chanvalue=0
                             self.chanvalue=self.chanvalue+bits[i][0]*2**(self.nbit%11)
                             if self.nbit%11==10:
                                 label='CH'+str(1+math.floor(self.nbit/11))
-                                self.put(self.channelss, bits[i][2], self.out_ann, [8, \
+                                self.put(self.datass, bits[i][2], self.out_ann, [8, \
                                     [label,label+': '+str(self.chanvalue)]])
                         self.nbit=self.nbit+1
             elif self.type==1:
                 if self.nbyte==2:
                     self.put(ss, es, self.out_ann, [9, ['PRIM','P']])
                 elif self.nbyte==3:
-                    self.channelss=ss
+                    self.datass=ss
                     self.appid=data[2][0]
                 elif self.nbyte==4:
                     self.appid=self.appid+256*data[2][0]
-                    self.put(self.channelss, es, self.out_ann, [10, ['APPID: '+hex(self.appid),'APPID','A']])
+                    self.put(self.datass, es, self.out_ann, [10, ['APPID: '+hex(self.appid),'APPID','A']])
                 elif self.nbyte>4 and self.nbyte<=8:
                     self.data=self.data+data[2][0]*256**(self.nbyte-5)
                     if self.nbyte==5:
-                        self.channelss=ss
+                        self.datass=ss
                     if self.nbyte==8:
-                        self.put(self.channelss, es, self.out_ann, [10, ['DATA: '+str(self.data),'DATA','D']])
+                        self.put(self.datass, es, self.out_ann, [10, ['DATA: '+str(self.data),'DATA','D']])
