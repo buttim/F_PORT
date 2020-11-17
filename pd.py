@@ -1,4 +1,5 @@
 import sigrokdecode as srd
+import math
 from common.srdhelper import SrdIntEnum
 
 class Decoder(srd.Decoder):
@@ -7,9 +8,9 @@ class Decoder(srd.Decoder):
     name = "F_PORT"
     longname = "FrSky F.PORT"
     desc = 'FrSky F.PORT.'
-    license = 'gplv2+'
+    license = 'lgplv2+'
     inputs = ['uart']
-    outputs = ['F_PORT']
+    outputs = []
     tags = ['RC']
     channels = (
     )
@@ -26,9 +27,11 @@ class Decoder(srd.Decoder):
         ('end','Frame end'),
         ('downlink','Downlink'),
         ('uplink','Uplink'),
+        ('channeldata','Channel data'),
     )
     annotation_rows = (
-        ('data', 'data', (0,1,2,3,4,5,6,7)),
+        ('frm', 'Framing', (0,1,2,3,4,5,6,7,)),
+        ('data', 'Channel data', (8,)),
     )
     binary = (
     )
@@ -45,6 +48,10 @@ class Decoder(srd.Decoder):
         self.sum=0
         self.type=0
         self.lastss=0
+        self.payload=[]
+        self.channelss=0
+        self.nbit=0
+        self.chanvalue=0
 
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
@@ -72,6 +79,7 @@ class Decoder(srd.Decoder):
                 if self.inframe:
                     if not self.stuffing and byte==0x7E:
                         self.inframe=False
+                        self.payload=[]
                         if self.nbyte!=self.length+2:
                             ##CHECK
                             self.put(self.lastss, es, self.out_ann, [0, ['BAD FRAME '+str(self.nbyte)+'+'+str(self.length),'BF']])
@@ -88,10 +96,12 @@ class Decoder(srd.Decoder):
                     else:
                         if self.nbyte==2:
                             self.ss=ss
+                        self.payload.append(byte)
                         self.nbyte=self.nbyte+1
                         if self.nbyte==self.length+1:
                             if self.type==0:
-                                self.put(self.ss, es, self.out_ann, [3, ['CHANNELS','C']])
+                                self.put(self.ss, es, self.out_ann, [3, ['CHANNEL DATA','CHANNELS','CHAN','C']])
+                                #self.put(self.ss, es, self.out_ann, [8, [str([hex(x) for x in self.payload ])]])
                             elif self.type==1:
                                 self.put(self.ss, es, self.out_ann, [6, ['DOWNLINK','D']])
                             elif self.type==0x81:   #NOT TESTED
@@ -111,3 +121,32 @@ class Decoder(srd.Decoder):
                         self.nbyte=0
                         self.sum=0
                 self.stuffing=False
+        elif data[0]=='DATA':
+            if self.type==0:
+                #print(data[2],flush=True)
+                bits=data[2][1]
+                if self.nbyte==24:
+                    ch17=bits[0][0]
+                    ch18=bits[1][0]
+                    framelost=bits[2][0]
+                    failsafe=bits[3][0]
+                    flags='CH17:'+str(ch17)+' CH18:'+str(ch18)+\
+                        ' FRAMELOST:'+str(framelost)+' FAILSAFE:'+str(failsafe)
+                    self.put(bits[0][1], bits[7][2], self.out_ann, [8, \
+                        ['FLAGS',flags]])
+                elif self.nbyte==25:
+                    self.put(bits[0][1], bits[7][2], self.out_ann, [8, ['RSSI','RSSI: '+str(data[2][0])]])
+                elif self.nbyte==2:
+                    self.nbit=0
+                if self.nbyte>=2 and self.nbyte<24:
+                    for i in range(8):
+                        if math.floor(self.nbit/11)<16:
+                            if self.nbit%11==0:
+                                self.channelss=bits[i][1]
+                                self.chanvalue=0
+                            self.chanvalue=self.chanvalue+bits[i][0]*2**(self.nbit%11)
+                            if self.nbit%11==10:
+                                label='CH'+str(1+math.floor(self.nbit/11))
+                                self.put(self.channelss, bits[i][2], self.out_ann, [8, \
+                                    [label,label+': '+str(self.chanvalue)]])
+                        self.nbit=self.nbit+1
