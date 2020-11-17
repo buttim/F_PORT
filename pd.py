@@ -28,10 +28,13 @@ class Decoder(srd.Decoder):
         ('downlink','Downlink'),
         ('uplink','Uplink'),
         ('channeldata','Channel data'),
+        ('prim','prim'),
+        ('appid','App.ID'),
+        ('data','Data'),
     )
     annotation_rows = (
         ('frm', 'Framing', (0,1,2,3,4,5,6,7,)),
-        ('data', 'Channel data', (8,)),
+        ('chdata', 'Channel data', (8,9,10,11)),
     )
     binary = (
     )
@@ -40,6 +43,7 @@ class Decoder(srd.Decoder):
         self.reset()
         
     def reset(self):
+        self.insync=False
         self.inframe=False
         self.ss=0
         self.nbyte=0
@@ -52,6 +56,8 @@ class Decoder(srd.Decoder):
         self.channelss=0
         self.nbit=0
         self.chanvalue=0
+        self.appid=0
+        self.data=0
 
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
@@ -64,6 +70,11 @@ class Decoder(srd.Decoder):
     def decode(self, ss, es, data):
         if data[0] == 'FRAME':
             byte=data[2][0]
+            if not self.insync:
+                if byte==0x7E:
+                    self.insync=True
+                else:
+                    return
             if self.stuffing:
                 if byte==0x5D:
                     byte=0x7D
@@ -78,6 +89,12 @@ class Decoder(srd.Decoder):
                 self.sum=self.sum+byte
                 if self.inframe:
                     if not self.stuffing and byte==0x7E:
+                        if self.nbyte==0:       #just synced maybe? (not tested!)
+                            self.put(self.lastss, es, self.out_ann, [0, ['HEAD','H']])
+                            self.inframe=True
+                            self.nbyte=0
+                            self.sum=0
+                            return
                         self.inframe=False
                         self.payload=[]
                         if self.nbyte!=self.length+2:
@@ -101,7 +118,6 @@ class Decoder(srd.Decoder):
                         if self.nbyte==self.length+1:
                             if self.type==0:
                                 self.put(self.ss, es, self.out_ann, [3, ['CHANNEL DATA','CHANNELS','CHAN','C']])
-                                #self.put(self.ss, es, self.out_ann, [8, [str([hex(x) for x in self.payload ])]])
                             elif self.type==1:
                                 self.put(self.ss, es, self.out_ann, [6, ['DOWNLINK','D']])
                             elif self.type==0x81:   #NOT TESTED
@@ -150,3 +166,18 @@ class Decoder(srd.Decoder):
                                 self.put(self.channelss, bits[i][2], self.out_ann, [8, \
                                     [label,label+': '+str(self.chanvalue)]])
                         self.nbit=self.nbit+1
+            elif self.type==1:
+                if self.nbyte==2:
+                    self.put(ss, es, self.out_ann, [9, ['PRIM','P']])
+                elif self.nbyte==3:
+                    self.channelss=ss
+                    self.appid=data[2][0]
+                elif self.nbyte==4:
+                    self.appid=self.appid+256*data[2][0]
+                    self.put(self.channelss, es, self.out_ann, [10, ['APPID: '+hex(self.appid),'APPID','A']])
+                elif self.nbyte>4 and self.nbyte<=8:
+                    self.data=self.data+data[2][0]*256**(self.nbyte-5)
+                    if self.nbyte==5:
+                        self.channelss=ss
+                    if self.nbyte==8:
+                        self.put(self.channelss, es, self.out_ann, [10, ['DATA: '+str(self.data),'DATA','D']])
