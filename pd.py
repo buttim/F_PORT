@@ -185,8 +185,6 @@ class Decoder(srd.Decoder):
                             elif self.type == 1:
                                 self.put(self.ss, es, self.out_ann,
                                          [6, ['DOWNLINK', 'D']])
-                                self.put(self.ss, es, self.out_ann,
-                                         [7, ['UPLINK', 'U']])
                         if self.nbyte == self.length + 2:
                             while self.sum > 0xFF:
                                 self.sum = (self.sum >> 8) + (self.sum & 0xFF)
@@ -203,6 +201,8 @@ class Decoder(srd.Decoder):
                         self.inframe = True
                         self.nbyte = 0
                         self.sum = 0
+                        self.data = 0
+                        self.appid = 0
                 self.stuffing = False
         elif data[0] == 'DATA':
             if self.type == 0:
@@ -229,7 +229,7 @@ class Decoder(srd.Decoder):
                                 self.datass = bits[i][1]
                                 self.chanvalue = 0
                             self.chanvalue = self.chanvalue +\
-                                bits[i][0] * 2 ** (self.nbit % 11)
+                                bits[i][0] * (1 << (self.nbit % 11))
                             if self.nbit % 11 == 10:
                                 label = 'CH' +\
                                         str(1 + math.floor(self.nbit / 11))
