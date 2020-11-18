@@ -1,5 +1,10 @@
 import sigrokdecode as srd
 import math
+from common.srdhelper import SrdIntEnum
+
+
+Ann = SrdIntEnum.from_list('Ann', ('HEAD LENGTH TYPE CHECKSUM END ' +
+                           'CHANNELDATA PRIM APPID DATA ERRORS').split())
 
 
 class Decoder(srd.Decoder):
@@ -25,18 +30,15 @@ class Decoder(srd.Decoder):
         ('channels', 'Channels Data'),
         ('checksum', 'Checksum'),
         ('end', 'Frame end'),
-        ('downlink', 'Downlink'),
-        ('uplink', 'Uplink'),
-        ('channeldata', 'Channel data'),
         ('prim', 'prim'),
         ('appid', 'App.ID'),
         ('data', 'Data'),
         ('errors', 'Errors'),
     )
     annotation_rows = (
-        ('frm', 'Framing', (0, 1, 2, 3, 4, 5, 6, 7, )),
-        ('chdata', 'Channel data', (8, 9, 10, 11, )),
-        ('err', 'Errors', (12, )),
+        ('proto', 'Protocol', (Ann.HEAD, Ann.LENGTH, Ann.TYPE, Ann.CHECKSUM,
+         Ann.END, Ann.CHANNELDATA, Ann.PRIM, Ann.APPID, Ann.DATA, Ann.ERRORS)),
+        ('err', 'Errors', (Ann.ERRORS, )),
     )
     binary = (
     )
@@ -98,17 +100,20 @@ class Decoder(srd.Decoder):
                     self.nbyte = 0
                     self.appid = 0
                     self.data = 0
-                    self.put(ss, es, self.out_ann, [1, [format(byte, 'X')]])
+                    self.put(ss, es, self.out_ann,
+                             [Ann.LENGTH, [format(byte, 'X')]])
                     return
 
             if self.uplink:
                 self.sum = self.sum + byte
                 if self.nbyte == 0:       # type
                     self.type = byte
-                    self.put(ss, es, self.out_ann, [3, [format(byte, 'X')]])
+                    self.put(ss, es, self.out_ann,
+                             [Ann.TYPE, [format(byte, 'X')]])
                 elif self.nbyte == 1:     # prim
                     self.prim = byte
-                    self.put(ss, es, self.out_ann, [9, [format(byte, 'X')]])
+                    self.put(ss, es, self.out_ann,
+                             [Ann.PRIM, [format(byte, 'X')]])
                     self.ss = ss
                 elif self.nbyte >= 2 and self.nbyte < 4:    # appid
                     self.appid = self.appid + byte * 256 ** (self.nbyte - 2)
@@ -117,25 +122,23 @@ class Decoder(srd.Decoder):
                     if self.nbyte == 3:
                         self.put(self.datass, es,
                                  self.out_ann,
-                                 [10, [format(self.appid, 'X')]])
+                                 [Ann.APPID, [format(self.appid, 'X')]])
                 elif self.nbyte >= 4 and self.nbyte < 8:    # data
                     self.data = self.data + byte * 256 ** (self.nbyte - 4)
                     if self.nbyte == 4:
                         self.datass = ss
                     if self.nbyte == 7:
                         self.put(self.datass, es, self.out_ann,
-                                 [11,
+                                 [Ann.DATA,
                                   [format(self.data, 'X')]])
-                        self.put(self.ss, es, self.out_ann,
-                                 [0, ['UPLINK', 'U']])
                 elif self.nbyte == 8:     # checksum
                     while self.sum > 0xFF:
                         self.sum = (self.sum >> 8) + (self.sum & 0xFF)
                     self.put(self.lastss, es, self.out_ann,
-                             [4, [format(byte, 'X')]])
+                             [Ann.CHECKSUM, [format(byte, 'X')]])
                     if self.sum != 0xFF:
                         self.put(self.lastss, es, self.out_ann,
-                                 [12, ['BAD CHECKSUM', 'BK']])
+                                 [Ann.ERRORS, ['BAD CHECKSUM', 'BK']])
                     self.uplink = False
                     self.type = 0
                 self.nbyte = self.nbyte + 1
@@ -147,7 +150,7 @@ class Decoder(srd.Decoder):
                     if not self.stuffing and byte == 0x7E:
                         if self.nbyte == 0:       # just synced maybe?
                             self.put(self.lastss, es, self.out_ann,
-                                     [0, [format(byte, 'X')]])
+                                     [Ann.HEAD, [format(byte, 'X')]])
                             self.inframe = True
                             self.nbyte = 0
                             self.sum = 0
@@ -157,18 +160,18 @@ class Decoder(srd.Decoder):
                         self.lastframees = es
                         if self.nbyte != self.length + 2:
                             self.put(self.lastss, es, self.out_ann,
-                                     [12, ['BAD FRAME LENGTH', 'BFL']])
+                                     [Ann.ERRORS, ['BAD FRAME LENGTH', 'BFL']])
                         else:
                             self.put(self.lastss, es, self.out_ann,
-                                     [5, [format(byte, 'X')]])
-                    elif self.nbyte == 0:
+                                     [Ann.END, [format(byte, 'X')]])
+                    elif self.nbyte == 0:       # length
                         self.put(self.lastss, es, self.out_ann,
-                                 [1, [format(byte, 'X')]])
+                                 [Ann.LENGTH, [format(byte, 'X')]])
                         self.length = byte
                         self.nbyte = 1
-                    elif self.nbyte == 1:
+                    elif self.nbyte == 1:       # type
                         self.put(self.lastss, es, self.out_ann,
-                                 [2, [format(byte, 'X')]])
+                                 [Ann.TYPE, [format(byte, 'X')]])
                         self.type = byte
                         self.nbyte = 2
                     else:
@@ -176,26 +179,18 @@ class Decoder(srd.Decoder):
                             self.ss = ss
                         self.payload.append(byte)
                         self.nbyte = self.nbyte + 1
-                        if self.nbyte == self.length + 1:
-                            if self.type == 0:
-                                self.put(self.ss, es, self.out_ann,
-                                         [3, ['CHANNEL DATA',
-                                              'CHANNELS', 'CHAN', 'C']])
-                            elif self.type == 1:
-                                self.put(self.ss, es, self.out_ann,
-                                         [6, ['DOWNLINK', 'D']])
-                        if self.nbyte == self.length + 2:
+                        if self.nbyte == self.length + 2:     # checksum
                             while self.sum > 0xFF:
                                 self.sum = (self.sum >> 8) + (self.sum & 0xFF)
                             self.put(self.lastss, es, self.out_ann,
-                                     [4, [format(byte, 'X')]])
+                                     [Ann.CHECKSUM, [format(byte, 'X')]])
                             if self.sum != 0xFF:
                                 self.put(self.lastss, es, self.out_ann,
-                                         [12, ['BAD CHECKSUM', 'BK']])
+                                         [Ann.ERRORS, ['BAD CHECKSUM', 'BK']])
                 else:
                     if (not self.stuffing) and byte == 0x7E:
                         self.put(self.lastss, es, self.out_ann,
-                                 [0, [format(byte, 'X')]])
+                                 [Ann.HEAD, [format(byte, 'X')]])
                         self.inframe = True
                         self.nbyte = 0
                         self.sum = 0
@@ -214,10 +209,11 @@ class Decoder(srd.Decoder):
                         ' FRAMELOST:' + str(framelost) + ' FAILSAFE:' +\
                         str(failsafe)
                     self.put(bits[0][1], bits[7][2], self.out_ann,
-                             [8, ['FLAGS', flags]])
+                             [Ann.CHANNELDATA, ['FLAGS', flags]])
                 elif self.nbyte == 25:
                     self.put(bits[0][1], bits[7][2], self.out_ann,
-                             [8, ['RSSI', 'RSSI: ' + str(data[2][0])]])
+                             [Ann.CHANNELDATA,
+                              ['RSSI', 'RSSI: ' + str(data[2][0])]])
                 elif self.nbyte == 2:
                     self.nbit = 0
                 if self.nbyte >= 2 and self.nbyte < 24:
@@ -234,22 +230,23 @@ class Decoder(srd.Decoder):
                                 longlabel = label + ': ' + str(self.chanvalue)
                                 self.put(self.datass,
                                          bits[i][2], self.out_ann,
-                                         [8, [label, longlabel]])
+                                         [Ann.CHANNELDATA, [label, longlabel]])
                         self.nbit = self.nbit + 1
             elif self.type == 1:
                 if self.nbyte == 2:
-                    self.put(ss, es, self.out_ann, [9, [format(byte, 'X')]])
+                    self.put(ss, es, self.out_ann,
+                             [Ann.PRIM, [format(data[2][0], 'X')]])
                 elif self.nbyte == 3:
                     self.datass = ss
                     self.appid = data[2][0]
                 elif self.nbyte == 4:
                     self.appid = self.appid * 256 + data[2][0]
                     self.put(self.datass, es, self.out_ann,
-                             [10, [format(self.appid, 'X')]])
+                             [Ann.APPID, [format(self.appid, 'X')]])
                 elif self.nbyte > 4 and self.nbyte <= 8:
                     self.data = self.data * 256 + data[2][0]
                     if self.nbyte == 5:
                         self.datass = ss
                     if self.nbyte == 8:
                         self.put(self.datass, es, self.out_ann,
-                                 [10, [str(self.data)]])
+                                 [Ann.DATA, [str(self.data)]])
