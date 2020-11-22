@@ -3,8 +3,8 @@ import math
 from common.srdhelper import SrdIntEnum
 
 
-Ann = SrdIntEnum.from_list('Ann', ('HEAD LENGTH TYPE CHECKSUM END ' +
-                           'CHANNELDATA PRIM APPID DATA ERRORS').split())
+Ann = SrdIntEnum.from_list('Ann', ('HEAD LENGTH TYPE CHANNELDATA CHECKSUM ' +
+                           'END PRIM APPID DATA ERRORS').split())
 
 
 class Decoder(srd.Decoder):
@@ -25,9 +25,9 @@ class Decoder(srd.Decoder):
     )
     annotations = (
         ('head', 'Frame header'),
-        ('len', 'Frame length'),
+        ('length', 'Frame length'),
         ('type', 'Frame type'),
-        ('channels', 'Channels Data'),
+        ('channeldata', 'Channels Data'),
         ('checksum', 'Checksum'),
         ('end', 'Frame end'),
         ('prim', 'prim'),
@@ -44,6 +44,11 @@ class Decoder(srd.Decoder):
     )
 
     def __init__(self):
+        # Uncomment the following lines to enable debugging
+        # import sys
+        # sys.path.insert(0, 'c:/Program Files (x86)/Python38-32/Lib/site-packages/winpdb_reborn-2.0.0.1-py3.8.egg')
+        # import rpdb2
+        # rpdb2.start_embedded_debugger("pd", fAllowRemote=True)
         self.reset()
 
     def reset(self):
@@ -67,6 +72,7 @@ class Decoder(srd.Decoder):
         self.prim = 0
 
     def start(self):
+        print("VIA", flush=True)
         self.out_ann = self.register(srd.OUTPUT_ANN)
 
     def metadata(self, key, value):
